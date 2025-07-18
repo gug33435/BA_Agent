@@ -57,11 +57,9 @@ def _extract_and_update_knowledge_logic(konversationshistorie: List[BaseMessage]
     
     extraction_prompt = f"""
     Du bist ein Experte für Prozessmodellierung und Datenextraktion. Deine Aufgabe ist es, eine Konversation in eine BPMN-konforme, graphen-basierte JSON-Struktur zu übersetzen.
-
     **KERN-ANWEISUNG:**
     Deine Aufgabe ist es, das `bisheriges_wissen`-Objekt zu nehmen und es basierend auf der letzten Nutzernachricht zu **ergänzen oder zu modifizieren**.
     Wenn die letzte Nachricht des Nutzers keine neuen, relevanten Prozessinformationen enthält (z.B. nur "ja", "danke", "gerne"), dann gib das `bisheriges_wissen`-Objekt **exakt unverändert** zurück. Lösche niemals vorhandenes Wissen.
-
     **REGELN ZUR MODELLIERUNG:**
     1.  **Atomarität:** Zerlege Sätze in einzelne, atomare Prozessschritte. "Rechnung prüfen und freigeben" sind ZWEI getrennte Knoten.
     2.  **BPMN-Wording:**
@@ -71,49 +69,63 @@ def _extract_and_update_knowledge_logic(konversationshistorie: List[BaseMessage]
     3.  **Graphen-Logik:**
         * Jedes Element ist ein Knoten in der `nodes`-Liste mit einer neuen, eindeutigen `id`.
         * Verbinde die Knoten logisch über die `next_nodes`-Liste.
-
     **BEISPIEL FÜR EIN GATEWAY:**
     * **Letzte Nutzernachricht:** "Danach prüft die Buchhaltung die Abrechnung. Wenn die Summe unter 100 Euro liegt, wird sie sofort zur Zahlung freigegeben. Ansonsten muss sie zusätzlich vom Teamleiter genehmigt werden."
     * **Korrekte Modellierung:** Du musst einen 'task' ("Abrechnung prüfen") erstellen, gefolgt von einem 'exclusiveGateway' ("Summe < 100€?"). Dieses Gateway hat dann ZWEI Einträge in `next_nodes`, die auf die beiden unterschiedlichen Pfade verweisen.
-
     **DEINE AKTUELLE AUFGABE:**
     Analysiere die Konversationshistorie und das bisherige Wissen. Führe deine Kern-Anweisung aus und gib das VOLLSTÄNDIGE und AKTUALISIERTE (oder unveränderte) Prozesswissen-Objekt zurück.
-
-    Bisheriges Wissen:
-    {json.dumps(bisheriges_wissen, indent=2, ensure_ascii=False)}
-
-    Konversationshistorie:
-    {json.dumps(history_for_prompt, indent=2, ensure_ascii=False)}
+    Bisheriges Wissen: {json.dumps(bisheriges_wissen, indent=2, ensure_ascii=False)}
+    Konversationshistorie: {json.dumps(history_for_prompt, indent=2, ensure_ascii=False)}
     """
     print("\n--- Extraktions-Logik wird aufgerufen ---")
     updated_knowledge = extraction_llm.invoke(extraction_prompt)
     print("--- Extraktion abgeschlossen, neues Wissen:", json.dumps(updated_knowledge, indent=2, ensure_ascii=False))
     return updated_knowledge
 
-# KORREKTUR: Die Funktion gibt jetzt einen kombinierten String zurück
-def _generate_summary_logic(bisheriges_wissen: dict):
-    """Erstellt eine textuelle Zusammenfassung UND einen formatierten JSON-Block."""
+# NEU: Angepasste Logik für die Zwischenzusammenfassung
+def _generate_interim_summary_logic(bisheriges_wissen: dict):
+    """Erstellt eine prägnante Zwischenzusammenfassung für den Nutzer."""
     summary_prompt = f"""
-    Du bist ein Prozessanalyst. Deine Aufgabe ist es, aus der folgenden JSON-Graphenstruktur eine klare und verständliche Zusammenfassung des Geschäftsprozesses in Prosa zu schreiben.
-    Gehe den Graphen schrittweise vom Start- bis zum Endknoten durch und beschreibe den Ablauf in chronologischer Reihenfolge.
-    Erwähne auch die beteiligten Akteure und das übergeordnete Prozessziel.
+    Du bist ein Prozessanalyst. Deine Aufgabe ist es, eine **prägnante Zwischenbilanz** des bisher erfassten Prozesses zu geben.
+    Fasse den aktuellen Stand kurz und verständlich zusammen, damit der Interviewpartner gut abgeholt wird und weiß, wo ihr gerade steht.
+    Beginne mit einer einleitenden Formulierung wie "Gerne, hier ist der aktuelle Stand:".
     WICHTIG: Gib nur reinen Text ohne Markdown-Formatierungen (wie ** oder *) zurück.
 
-    Prozess-Struktur:
+    Prozess-Struktur als Grundlage:
     {json.dumps(bisheriges_wissen, indent=2, ensure_ascii=False)}
     """
-    print("\n--- Zusammenfassungs-Logik wird aufgerufen ---")
+    print("\n--- Zwischenzusammenfassungs-Logik wird aufgerufen ---")
     prose_summary = llm.invoke(summary_prompt).content
-    print("--- Prosa-Zusammenfassung erstellt:", prose_summary)
-
-    # Erstelle den formatierten JSON-Block für die Slack-Ausgabe
     json_string = json.dumps(bisheriges_wissen, indent=2, ensure_ascii=False)
     formatted_json_block = f"```json\n{json_string}\n```"
-
-    # Kombiniere beide Teile für die finale Ausgabe
     final_output = (
         f"{prose_summary}\n\n"
         "--- Interner Wissensspeicher (JSON-Repräsentation) ---\n"
+        f"{formatted_json_block}"
+    )
+    return final_output
+
+# NEU: Eigene Logik für die finale Zusammenfassung
+def _generate_final_summary_logic(bisheriges_wissen: dict):
+    """Erstellt eine formale, finale Prozessbeschreibung."""
+    summary_prompt = f"""
+    Du bist ein Principal Process Consultant. Deine Aufgabe ist es, aus der folgenden JSON-Graphenstruktur eine **formale, vollständige und finale textuelle Prozessbeschreibung** zu erstellen.
+    Diese Beschreibung dient als offizielles Protokoll des Interviews und als Grundlage für die BPMN-Modellierung.
+    Strukturiere den Text klar mit einer Einleitung (Prozessziel, Akteure) und einer schrittweisen Beschreibung des Ablaufs.
+    Beschreibe alle Pfade, die durch Gateways entstehen, detailliert.
+    WICHTIG: Gib nur reinen Text ohne Markdown-Formatierungen (wie ** oder *) zurück.
+
+    Prozess-Struktur als Grundlage:
+    {json.dumps(bisheriges_wissen, indent=2, ensure_ascii=False)}
+    """
+    print("\n--- Finale Zusammenfassungs-Logik wird aufgerufen ---")
+    prose_summary = llm.invoke(summary_prompt).content
+    json_string = json.dumps(bisheriges_wissen, indent=2, ensure_ascii=False)
+    formatted_json_block = f"```json\n{json_string}\n```"
+    final_output = (
+        f"Vielen Dank für die Bestätigung. Hier ist die finale Zusammenfassung des Prozesses '{bisheriges_wissen.get('prozessname', '')}':\n\n"
+        f"{prose_summary}\n\n"
+        "--- Finaler Wissensspeicher (JSON-Repräsentation) ---\n"
         f"{formatted_json_block}"
     )
     return final_output
@@ -127,18 +139,24 @@ def update_wissensbasis():
 
 @tool
 def provide_interim_summary():
-    """Erstellt eine textuelle Zusammenfassung des bisher erfassten Prozesses inklusive der internen JSON-Struktur."""
-    return "Zusammenfassung wird erstellt."
+    """Erstellt eine prägnante Zwischenzusammenfassung des bisher erfassten Prozesses."""
+    return "Zwischenzusammenfassung wird erstellt."
 
 @tool
 def propose_reset():
     """Schlägt dem Nutzer vor, die Konversation zurückzusetzen und wartet auf Bestätigung."""
     return "Bestätigung für Reset wird angefordert."
 
+# NEU: Das Werkzeug für die finale Zusammenfassung
+@tool
+def create_final_summary():
+    """Erstellt die finale, formale Prozessbeschreibung am Ende des Interviews."""
+    return "Finale Zusammenfassung wird erstellt."
+
 
 # --- 3. LangGraph-Setup mit erweiterter Tool-Logik ---
 
-tools = [update_wissensbasis, provide_interim_summary, propose_reset]
+tools = [update_wissensbasis, provide_interim_summary, propose_reset, create_final_summary]
 llm_with_tools = llm.bind_tools(tools)
 
 def agent_node(state: AgentState):
@@ -154,25 +172,26 @@ def custom_tool_node(state: AgentState):
     tool_call_id = tool_call['id']
 
     if tool_name == "update_wissensbasis":
-        print("Werkzeug 'update_wissensbasis' wird ausgeführt.")
         updated_knowledge = _extract_and_update_knowledge_logic(state['messages'], state['process_knowledge'])
         tool_message = ToolMessage(content="Wissen erfolgreich aktualisiert.", tool_call_id=tool_call_id)
         return {"messages": [tool_message], "process_knowledge": updated_knowledge}
     
     elif tool_name == "provide_interim_summary":
-        print("Werkzeug 'provide_interim_summary' wird ausgeführt.")
-        summary_text = _generate_summary_logic(state['process_knowledge'])
+        summary_text = _generate_interim_summary_logic(state['process_knowledge'])
         tool_message = ToolMessage(content=summary_text, tool_call_id=tool_call_id)
         return {"messages": [tool_message]}
         
     elif tool_name == "propose_reset":
-        print("Werkzeug 'propose_reset' wird ausgeführt.")
         confirmation_question = "Ich habe verstanden, dass Sie neu starten möchten. Soll ich den aktuellen Fortschritt wirklich verwerfen? Bitte antworten Sie mit 'Ja' oder 'Nein'."
         tool_message = ToolMessage(content=confirmation_question, tool_call_id=tool_call_id)
-        return {
-            "messages": [tool_message],
-            "confirmation_pending": "reset"
-        }
+        return {"messages": [tool_message], "confirmation_pending": "reset"}
+
+    # NEU: Logik für das finale Zusammenfassungs-Tool
+    elif tool_name == "create_final_summary":
+        summary_text = _generate_final_summary_logic(state['process_knowledge'])
+        tool_message = ToolMessage(content=summary_text, tool_call_id=tool_call_id)
+        # Wir beenden das Gespräch nach der finalen Zusammenfassung
+        return {"messages": [tool_message]}
 
 def router(state: AgentState) -> str:
     if state['messages'][-1].tool_calls:
@@ -194,13 +213,13 @@ SYSTEM_PROMPT = """
 # 1. ROLLE & MISSION
 Du bist 'Prozess-Bot', ein KI-gestützter Principal Process Consultant. Deine Antworten sollten klar, präzise und ohne Markdown-Formatierung (wie ** oder *) sein.
 
-# 2. ZU ERHEBENDE KERN-INFORMATIONEN
-Dein Ziel ist es, Informationen zu Prozessname, Ziel, Akteuren, Start, Aktivitäten, Entscheidungen und Ende zu sammeln.
-
-# 3. METHODIK & GESPRÄCHSFÜHRUNG
+# 2. METHODIK & GESPRÄCHSFÜHRUNG
+- **Dialogsteuerung:** Führe den Nutzer aktiv durch das Interview.
 - **Wissens-Aktualisierung:** Nach relevanten Nutzer-Antworten, rufe `update_wissensbasis()` auf.
-- **Zusammenfassung:** Wenn der Nutzer nach einer Zusammenfassung fragt, rufe `provide_interim_summary()` auf.
-- **Reset-Erkennung:** Wenn der Nutzer das Gespräch abbrechen oder neu starten möchte (z.B. "lass uns neu anfangen", "von vorne", "neuer Prozess"), rufe das Werkzeug `propose_reset()` auf, um eine Bestätigung anzufordern.
+- **Zwischenzusammenfassung:** Wenn der Nutzer explizit nach einer Zusammenfassung fragt, rufe `provide_interim_summary()` auf.
+- **Abschluss einleiten:** Wenn du glaubst, dass ein Prozess logisch abgeschlossen ist (z.B. nach einem End-Ereignis), frage den Nutzer proaktiv, ob der Prozess vollständig ist oder ob es weitere Ausnahmen gibt.
+- **Finale Zusammenfassung:** Wenn der Nutzer bestätigt, dass der Prozess vollständig ist, rufe das Werkzeug `create_final_summary()` auf, um das Interview abzuschließen.
+- **Reset-Erkennung:** Wenn der Nutzer das Gespräch abbrechen oder neu starten möchte, rufe `propose_reset()` auf.
 - **Kritisches Nachfragen:** Reagiere auf unklare oder unvollständige Antworten mit gezielten Nachfragen.
 """
 
@@ -264,5 +283,5 @@ def slack_events():
     return handler.handle(request)
 
 if __name__ == "__main__":
-    print("Flask-Server mit robuster Extraktions-Logik wird gestartet...")
+    print("Flask-Server mit Abschlusslogik wird gestartet...")
     flask_app.run(host='0.0.0.0', port=5001)
