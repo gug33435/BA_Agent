@@ -8,3 +8,11 @@ venv/
 # Python cache
 __pycache__/
 *.pyc
+
+# Sonstiges
+Spesenabrechnung_Test.bpmn
+Spesenabrechnung.bpmn
+output.bpmn
+input.json
+test.py
+app_original.py
